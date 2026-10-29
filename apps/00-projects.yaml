@@ -37,8 +37,10 @@ spec:
     - {group: kyverno.io, kind: ClusterPolicy}                        # policies/ (Kyverno option)
   namespaceResourceWhitelist:
     - {group: "*", kind: "*"}
-  orphanedResources:
-    warn: true
+  # No orphanedResources monitoring here: platform apps default to namespaces
+  # such as openshift-gitops that are full of operator-managed objects, so it
+  # only produces noise. The "catalogue" project keeps it on for its app
+  # namespaces, where an unmanaged object really is a problem.
   roles:
     - name: platform-admins
       description: Platform team may sync and manage all platform apps
