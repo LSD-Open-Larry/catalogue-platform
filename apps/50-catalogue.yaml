@@ -1,0 +1,39 @@
+# Wave 4 - the application itself. Points at the catalogue-config repo's
+# apps/ folder, which is its own app of apps:
+#
+#   catalogue-root  (this Application)
+#    └─ catalogue-config/apps/
+#        ├─ appproject.yaml      AppProject "catalogue"
+#        ├─ catalogue-dev.yaml   -> environments/dev
+#        ├─ catalogue-test.yaml  -> environments/test
+#        └─ catalogue-prod.yaml  -> environments/prod
+#
+# This replaces applying catalogue-config's root app by hand. Last wave, so
+# namespaces, RBAC, Sealed Secrets and pipelines already exist.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: catalogue-root
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+  labels:
+    app.kubernetes.io/part-of: catalogue-platform
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/LSD-Open-Larry/catalogue-config.git
+    targetRevision: main
+    path: apps
+    directory:
+      recurse: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: openshift-gitops
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 10
+      backoff: {duration: 15s, factor: 2, maxDuration: 5m}

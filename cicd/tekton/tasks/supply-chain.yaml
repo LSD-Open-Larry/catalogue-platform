@@ -1,0 +1,217 @@
+# Post-build supply-chain tasks: ACS policy check on the pushed image,
+# SBOM generation, signing and attestation, and promotion to dev via Git.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: acs-image-check
+  namespace: catalogue-cicd
+  labels:
+    app.kubernetes.io/part-of: catalogue-cicd
+spec:
+  description: >-
+    Asks Red Hat Advanced Cluster Security to scan the image and evaluate
+    build-time policies. Any policy with enforcement "Build" fails the task.
+    roxctl is downloaded from your own Central, so its version always matches.
+  params:
+    - name: image
+      type: string
+      description: Image reference by digest (repo@sha256:...)
+    - name: insecure-skip-tls-verify
+      type: string
+      default: "false"
+  steps:
+    - name: get-roxctl
+      image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+      env:
+        - name: ROX_API_TOKEN
+          valueFrom: {secretKeyRef: {name: roxsecrets, key: rox_api_token}}
+        - name: ROX_ENDPOINT
+          valueFrom: {secretKeyRef: {name: roxsecrets, key: rox_central_endpoint}}
+      volumeMounts:
+        - {name: tools, mountPath: /tools}
+      script: |
+        #!/bin/sh
+        set -eu
+        K=""
+        [ "$(params.insecure-skip-tls-verify)" = "true" ] && K="-k"
+        curl -sSf $K -H "Authorization: Bearer ${ROX_API_TOKEN}" \
+          "https://${ROX_ENDPOINT}/api/cli/download/roxctl-linux" -o /tools/roxctl
+        chmod +x /tools/roxctl
+    - name: image-check
+      image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+      env:
+        - name: ROX_API_TOKEN
+          valueFrom: {secretKeyRef: {name: roxsecrets, key: rox_api_token}}
+        - name: ROX_ENDPOINT
+          valueFrom: {secretKeyRef: {name: roxsecrets, key: rox_central_endpoint}}
+      volumeMounts:
+        - {name: tools, mountPath: /tools}
+      script: |
+        #!/bin/sh
+        set -eu
+        INSECURE=""
+        [ "$(params.insecure-skip-tls-verify)" = "true" ] && INSECURE="--insecure-skip-tls-verify"
+        echo "== Vulnerability scan (report only)"
+        /tools/roxctl image scan --image "$(params.image)" $INSECURE --output table --force || true
+        echo "== Build-time policy check (gate)"
+        /tools/roxctl image check --image "$(params.image)" $INSECURE --output table
+  volumes:
+    - name: tools
+      emptyDir: {}
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: sbom-sign-attest
+  namespace: catalogue-cicd
+  labels:
+    app.kubernetes.io/part-of: catalogue-cicd
+spec:
+  description: >-
+    Generates a CycloneDX SBOM with Syft, signs the image with Cosign and
+    attaches the SBOM as a signed attestation. Everything is addressed by
+    digest. Alternative: enable Tekton Chains to sign automatically.
+  params:
+    - name: image-repo
+      type: string
+    - name: digest
+      type: string
+    - name: tlog-upload
+      type: string
+      default: "false"
+      description: Set to "true" when a Rekor transparency log (public or RHTAS) is reachable
+    - name: syft-image
+      type: string
+      default: docker.io/anchore/syft:v1.16.0
+    - name: cosign-image
+      type: string
+      default: gcr.io/projectsigstore/cosign:v2.4.1
+  workspaces:
+    - name: source
+    - name: registry-auth
+      description: Secret with config.json (registry push credentials)
+    - name: cosign-keys
+      description: Secret with cosign.key (and cosign.pub)
+  steps:
+    - name: sbom
+      image: $(params.syft-image)
+      env:
+        - name: DOCKER_CONFIG
+          value: $(workspaces.registry-auth.path)
+      command: ["/syft"]
+      args:
+        - scan
+        - "registry:$(params.image-repo)@$(params.digest)"
+        - -o
+        - "cyclonedx-json=$(workspaces.source.path)/sbom.cdx.json"
+    - name: sign
+      image: $(params.cosign-image)
+      env:
+        - name: DOCKER_CONFIG
+          value: $(workspaces.registry-auth.path)
+        - name: COSIGN_PASSWORD
+          valueFrom: {secretKeyRef: {name: cosign-keys, key: cosign.password}}
+      command: ["/ko-app/cosign"]
+      args:
+        - sign
+        - --yes
+        - --key
+        - $(workspaces.cosign-keys.path)/cosign.key
+        - --tlog-upload=$(params.tlog-upload)
+        - "$(params.image-repo)@$(params.digest)"
+    - name: attest-sbom
+      image: $(params.cosign-image)
+      env:
+        - name: DOCKER_CONFIG
+          value: $(workspaces.registry-auth.path)
+        - name: COSIGN_PASSWORD
+          valueFrom: {secretKeyRef: {name: cosign-keys, key: cosign.password}}
+      command: ["/ko-app/cosign"]
+      args:
+        - attest
+        - --yes
+        - --key
+        - $(workspaces.cosign-keys.path)/cosign.key
+        - --type
+        - cyclonedx
+        - --predicate
+        - $(workspaces.source.path)/sbom.cdx.json
+        - --tlog-upload=$(params.tlog-upload)
+        - "$(params.image-repo)@$(params.digest)"
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: gitops-promote
+  namespace: catalogue-cicd
+  labels:
+    app.kubernetes.io/part-of: catalogue-cicd
+spec:
+  description: >-
+    Writes the new image digest into environments/<env>/deployment.yaml and
+    migrate-job.yaml in the config repo and pushes. This is the ONLY way CI touches an environment:
+    Argo CD sees the commit and syncs. Used for dev only; test and prod are
+    promoted by reviewed pull requests.
+  params:
+    - name: config-repo-url
+      type: string
+    - name: environment
+      type: string
+      default: dev
+    - name: digest
+      type: string
+    - name: version
+      type: string
+    - name: source-commit
+      type: string
+    - name: pipeline-run
+      type: string
+    - name: image
+      type: string
+      default: docker.io/alpine/git:2.45.2
+  workspaces:
+    - name: config-repo-auth
+      description: Secret with .git-credentials and .gitconfig (git-clone basic-auth format)
+  steps:
+    - name: promote
+      image: $(params.image)
+      env:
+        - name: HOME
+          value: /tmp/home
+      script: |
+        #!/bin/sh
+        set -eu
+        mkdir -p "$HOME"
+        cp "$(workspaces.config-repo-auth.path)/.git-credentials" "$HOME/.git-credentials"
+        cp "$(workspaces.config-repo-auth.path)/.gitconfig" "$HOME/.gitconfig"
+        git config --global user.name  "catalogue-pipeline"
+        git config --global user.email "pipeline@catalogue.local"
+
+        git clone --depth 1 "$(params.config-repo-url)" /tmp/config
+        cd /tmp/config
+        DIR="environments/$(params.environment)"
+        # The app image appears in the Deployment and the migration Job:
+        # both must move together so schema and code always match.
+        sed -i -E "s|(catalogue-api)@sha256:[A-Za-z0-9]+|\1@$(params.digest)|" \
+          "$DIR/deployment.yaml" "$DIR/migrate-job.yaml"
+        sed -i -E "s|(catalogue.example.com/version: ).*|\1\"$(params.version)\"|" "$DIR/deployment.yaml"
+        sed -i -E "s|(catalogue.example.com/source-commit: ).*|\1\"$(params.source-commit)\"|" "$DIR/deployment.yaml"
+        git --no-pager diff
+
+        if git diff --quiet; then
+          echo "Digest already deployed to $(params.environment); nothing to do."
+          exit 0
+        fi
+        git commit -am "promote($(params.environment)): catalogue-api $(params.version)
+
+        image-digest: $(params.digest)
+        source-commit: $(params.source-commit)
+        pipeline-run: $(params.pipeline-run)"
+
+        # Retry on a concurrent push to main.
+        for i in 1 2 3; do
+          if git push origin HEAD:main; then exit 0; fi
+          git pull --rebase origin main
+        done
+        echo "push failed after retries" >&2
+        exit 1

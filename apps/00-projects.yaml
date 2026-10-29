@@ -1,0 +1,48 @@
+# AppProject "platform": the guard rails for everything the platform team
+# deploys from Git. Synced by bootstrap.yaml in wave -1, so it exists before
+# any Application that uses it.
+#
+# It is deliberately wider than the "catalogue" project in catalogue-config:
+# the platform installs operators and cluster-scoped objects (namespaces,
+# ClusterRoles). Application teams never use this project.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  description: Cluster platform - operators, cluster config, CI/CD, policies
+  sourceRepos:
+    - https://github.com/LSD-Open-Larry/catalogue-platform.git
+    - https://github.com/LSD-Open-Larry/catalogue-config.git
+    - https://bitnami-labs.github.io/sealed-secrets        # Sealed Secrets Helm chart
+  destinations:
+    - {server: https://kubernetes.default.svc, namespace: openshift-gitops}
+    - {server: https://kubernetes.default.svc, namespace: openshift-monitoring}
+    - {server: https://kubernetes.default.svc, namespace: sealed-secrets}
+    - {server: https://kubernetes.default.svc, namespace: rhacs-operator}
+    - {server: https://kubernetes.default.svc, namespace: stackrox}
+    - {server: https://kubernetes.default.svc, namespace: catalogue-cicd}
+    - {server: https://kubernetes.default.svc, namespace: catalogue-dev}
+    - {server: https://kubernetes.default.svc, namespace: catalogue-test}
+    - {server: https://kubernetes.default.svc, namespace: catalogue-prod}
+  # Cluster-scoped kinds the platform may create. Anything else is refused.
+  clusterResourceWhitelist:
+    - {group: "", kind: Namespace}
+    - {group: rbac.authorization.k8s.io, kind: ClusterRole}
+    - {group: rbac.authorization.k8s.io, kind: ClusterRoleBinding}
+    - {group: apiextensions.k8s.io, kind: CustomResourceDefinition}   # Sealed Secrets chart
+    - {group: kyverno.io, kind: ClusterPolicy}                        # policies/ (Kyverno option)
+  namespaceResourceWhitelist:
+    - {group: "*", kind: "*"}
+  orphanedResources:
+    warn: true
+  roles:
+    - name: platform-admins
+      description: Platform team may sync and manage all platform apps
+      policies:
+        - p, proj:platform:platform-admins, applications, *, platform/*, allow
+      groups:
+        - catalogue-platform-admins

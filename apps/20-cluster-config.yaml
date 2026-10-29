@@ -1,0 +1,41 @@
+# Wave 1 - cluster configuration, from cluster/:
+#   namespaces.yaml                        catalogue-cicd, -dev, -test, -prod
+#                                          (labelled managed-by openshift-gitops)
+#   rbac/argocd-extra-permissions.yaml     Argo CD rights on SealedSecrets and
+#                                          monitoring CRs; view/edit for the
+#                                          catalogue groups
+#   monitoring/user-workload-monitoring.yaml
+#
+# CAUTION: user-workload-monitoring.yaml owns the whole
+# cluster-monitoring-config ConfigMap. If your cluster already has one, copy
+# its settings into that file first, or delete the file and enable user
+# workload monitoring by hand.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cluster-config
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  labels:
+    app.kubernetes.io/part-of: catalogue-platform
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/LSD-Open-Larry/catalogue-platform.git
+    targetRevision: main
+    path: cluster
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: false          # never delete a namespace (and its data) because a file moved
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+    retry:
+      limit: 10
+      backoff: {duration: 15s, factor: 2, maxDuration: 5m}

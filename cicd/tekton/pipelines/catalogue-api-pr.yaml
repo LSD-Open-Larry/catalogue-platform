@@ -1,0 +1,87 @@
+# PR pipeline: fast feedback on every pull request. Nothing is pushed or
+# deployed. The quality and security checks run in parallel after the clone.
+#
+#   clone ─┬─ npm-install ─┬─ lint
+#          │               └─ unit-test
+#          ├─ sast (semgrep)
+#          ├─ sca (trivy fs)
+#          ├─ secret-scan (gitleaks)
+#          └─ containerfile-scan (trivy config)
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: catalogue-api-pr
+  namespace: catalogue-cicd
+  labels:
+    app.kubernetes.io/part-of: catalogue-cicd
+spec:
+  params:
+    - name: git-url
+      type: string
+    - name: git-revision
+      type: string
+    - name: pull-request
+      type: string
+      default: ""
+  workspaces:
+    - name: source
+    - name: git-auth
+      optional: true
+  tasks:
+    - name: clone
+      taskRef:
+        resolver: cluster
+        params:
+          - {name: kind, value: task}
+          - {name: name, value: git-clone}
+          - {name: namespace, value: openshift-pipelines}
+      params:
+        - {name: URL, value: $(params.git-url)}
+        - {name: REVISION, value: $(params.git-revision)}
+      workspaces:
+        - {name: output, workspace: source}
+        - {name: basic-auth, workspace: git-auth}
+
+    - name: npm-install
+      runAfter: [clone]
+      taskRef: {name: npm-install}
+      params:
+        - {name: commit, value: $(tasks.clone.results.COMMIT)}
+      workspaces:
+        - {name: source, workspace: source}
+
+    - name: lint
+      runAfter: [npm-install]
+      taskRef: {name: npm-lint}
+      workspaces:
+        - {name: source, workspace: source}
+
+    - name: unit-test
+      runAfter: [npm-install]
+      taskRef: {name: npm-test}
+      workspaces:
+        - {name: source, workspace: source}
+
+    - name: sast
+      runAfter: [clone]
+      taskRef: {name: sast-semgrep}
+      workspaces:
+        - {name: source, workspace: source}
+
+    - name: sca
+      runAfter: [clone]
+      taskRef: {name: sca-trivy-fs}
+      workspaces:
+        - {name: source, workspace: source}
+
+    - name: secret-scan
+      runAfter: [clone]
+      taskRef: {name: secret-scan-gitleaks}
+      workspaces:
+        - {name: source, workspace: source}
+
+    - name: containerfile-scan
+      runAfter: [clone]
+      taskRef: {name: containerfile-scan}
+      workspaces:
+        - {name: source, workspace: source}

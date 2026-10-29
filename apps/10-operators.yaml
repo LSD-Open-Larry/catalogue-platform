@@ -1,0 +1,84 @@
+# Wave 0 - operators and controllers everything else depends on.
+#
+# platform-operators : OLM Subscriptions in operators/ (Red Hat ACS).
+# sealed-secrets     : the Sealed Secrets controller, from its official Helm
+#                      chart. Every SealedSecret in cicd/ and catalogue-config
+#                      needs it running first.
+#
+# OpenShift Pipelines and OpenShift GitOps are assumed preinstalled (they are
+# in the Platform Plus lab). To manage Pipelines here too, add its
+# Subscription to operators/.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-operators
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  labels:
+    app.kubernetes.io/part-of: catalogue-platform
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/LSD-Open-Larry/catalogue-platform.git
+    targetRevision: main
+    path: operators
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: false          # never uninstall an operator because a file moved
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+    retry:
+      limit: 10
+      backoff: {duration: 15s, factor: 2, maxDuration: 5m}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sealed-secrets
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  labels:
+    app.kubernetes.io/part-of: catalogue-platform
+spec:
+  project: platform
+  source:
+    repoURL: https://bitnami-labs.github.io/sealed-secrets
+    chart: sealed-secrets
+    # Pin the chart. Check https://github.com/bitnami-labs/sealed-secrets/releases
+    # for the current helm-v* release before the workshop.
+    targetRevision: 2.22.0
+    helm:
+      releaseName: sealed-secrets
+      valuesObject:
+        # Name and namespace the kubeseal scripts expect.
+        fullnameOverride: sealed-secrets-controller
+        # OpenShift assigns the UID from the namespace range under the
+        # restricted-v2 SCC, so do not hard-code runAsUser / fsGroup.
+        podSecurityContext:
+          enabled: false
+        containerSecurityContext:
+          enabled: true
+          runAsUser: null
+        resources:
+          requests: {cpu: 50m, memory: 64Mi}
+          limits: {cpu: 250m, memory: 256Mi}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sealed-secrets
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 10
+      backoff: {duration: 15s, factor: 2, maxDuration: 5m}

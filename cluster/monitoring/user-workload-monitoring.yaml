@@ -1,0 +1,11 @@
+# Enables monitoring for user-defined projects so the catalogue ServiceMonitor
+# and PrometheusRule are picked up. If cluster-monitoring-config already
+# exists, merge `enableUserWorkload: true` into it instead of replacing it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-monitoring-config
+  namespace: openshift-monitoring
+data:
+  config.yaml: |
+    enableUserWorkload: true

@@ -1,0 +1,104 @@
+# The managed-by label grants the Argo CD application controller the
+# built-in `admin` role in each namespace. That role does not cover the
+# monitoring and Sealed Secrets CRDs, so grant those explicitly.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: catalogue-sealedsecrets-edit
+rules:
+  - apiGroups: [bitnami.com]
+    resources: [sealedsecrets]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argocd-sealedsecrets-edit
+  namespace: catalogue-dev
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: catalogue-sealedsecrets-edit}
+subjects:
+  - {kind: ServiceAccount, name: openshift-gitops-argocd-application-controller, namespace: openshift-gitops}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argocd-sealedsecrets-edit
+  namespace: catalogue-test
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: catalogue-sealedsecrets-edit}
+subjects:
+  - {kind: ServiceAccount, name: openshift-gitops-argocd-application-controller, namespace: openshift-gitops}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argocd-sealedsecrets-edit
+  namespace: catalogue-prod
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: catalogue-sealedsecrets-edit}
+subjects:
+  - {kind: ServiceAccount, name: openshift-gitops-argocd-application-controller, namespace: openshift-gitops}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argocd-monitoring-edit
+  namespace: catalogue-dev
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: monitoring-edit}
+subjects:
+  - {kind: ServiceAccount, name: openshift-gitops-argocd-application-controller, namespace: openshift-gitops}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argocd-monitoring-edit
+  namespace: catalogue-test
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: monitoring-edit}
+subjects:
+  - {kind: ServiceAccount, name: openshift-gitops-argocd-application-controller, namespace: openshift-gitops}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argocd-monitoring-edit
+  namespace: catalogue-prod
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: monitoring-edit}
+subjects:
+  - {kind: ServiceAccount, name: openshift-gitops-argocd-application-controller, namespace: openshift-gitops}
+---
+# Developers may read everything in the app namespaces but change nothing:
+# all changes go through Git. Release managers get the same read access.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: catalogue-developers-view
+  namespace: catalogue-dev
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: view}
+subjects:
+  - {apiGroup: rbac.authorization.k8s.io, kind: Group, name: catalogue-developers}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: catalogue-developers-view
+  namespace: catalogue-test
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: view}
+subjects:
+  - {apiGroup: rbac.authorization.k8s.io, kind: Group, name: catalogue-developers}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: catalogue-developers-view
+  namespace: catalogue-prod
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: view}
+subjects:
+  - {apiGroup: rbac.authorization.k8s.io, kind: Group, name: catalogue-developers}
+---
+# Developers can watch and re-run pipelines in the CI namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: catalogue-developers-edit-cicd
+  namespace: catalogue-cicd
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: edit}
+subjects:
+  - {apiGroup: rbac.authorization.k8s.io, kind: Group, name: catalogue-developers}

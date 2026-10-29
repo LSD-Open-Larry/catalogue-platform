@@ -1,0 +1,45 @@
+# Config-repo PR pipeline: every change to deployment state (including a
+# promotion to test or prod) is linted before it can be merged.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: catalogue-config-pr
+  namespace: catalogue-cicd
+  labels:
+    app.kubernetes.io/part-of: catalogue-cicd
+spec:
+  params:
+    - name: git-url
+      type: string
+    - name: git-revision
+      type: string
+  workspaces:
+    - name: source
+    - name: git-auth
+      optional: true
+  tasks:
+    - name: clone
+      taskRef:
+        resolver: cluster
+        params:
+          - {name: kind, value: task}
+          - {name: name, value: git-clone}
+          - {name: namespace, value: openshift-pipelines}
+      params:
+        - {name: URL, value: $(params.git-url)}
+        - {name: REVISION, value: $(params.git-revision)}
+      workspaces:
+        - {name: output, workspace: source}
+        - {name: basic-auth, workspace: git-auth}
+
+    - name: manifest-scan
+      runAfter: [clone]
+      taskRef: {name: manifest-scan-kube-linter}
+      workspaces:
+        - {name: source, workspace: source}
+
+    - name: secret-scan
+      runAfter: [clone]
+      taskRef: {name: secret-scan-gitleaks}
+      workspaces:
+        - {name: source, workspace: source}

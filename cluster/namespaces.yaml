@@ -1,0 +1,32 @@
+# Application namespaces are labelled so the default OpenShift GitOps
+# instance (openshift-gitops) gets admin rights in them - and nowhere else.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: catalogue-cicd
+  labels:
+    app.kubernetes.io/part-of: catalogue
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: catalogue-dev
+  labels:
+    app.kubernetes.io/part-of: catalogue
+    argocd.argoproj.io/managed-by: openshift-gitops
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: catalogue-test
+  labels:
+    app.kubernetes.io/part-of: catalogue
+    argocd.argoproj.io/managed-by: openshift-gitops
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: catalogue-prod
+  labels:
+    app.kubernetes.io/part-of: catalogue
+    argocd.argoproj.io/managed-by: openshift-gitops

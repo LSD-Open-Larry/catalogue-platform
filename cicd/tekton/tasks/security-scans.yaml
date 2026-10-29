@@ -1,0 +1,184 @@
+# Shift-left security scans. Each one is a gate: a non-zero exit fails the
+# PipelineRun, which Pipelines-as-Code reports as a failed check on the PR.
+# Image tags are parameters so you can pin them by digest for your cluster.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: sast-semgrep
+  namespace: catalogue-cicd
+  labels:
+    app.kubernetes.io/part-of: catalogue-cicd
+spec:
+  description: >-
+    Static application security testing with Semgrep. Fails on ERROR-severity
+    findings (for example SQL built by string concatenation).
+    Alternative: SonarQube with a quality gate (sonar-scanner + sonar.qualitygate.wait=true).
+  params:
+    - name: rulesets
+      type: string
+      description: >-
+        Local rules in the repo work offline. With internet access, append
+        registry packs: "--config .semgrep --config p/javascript --config p/sql-injection"
+      default: "--config .semgrep"
+    - name: image
+      type: string
+      default: docker.io/semgrep/semgrep:1.95.0
+  workspaces:
+    - name: source
+  steps:
+    - name: semgrep
+      image: $(params.image)
+      workingDir: $(workspaces.source.path)
+      env:
+        - name: HOME
+          value: /tmp
+        - name: SEMGREP_SEND_METRICS
+          value: "off"
+      computeResources:
+        requests: {cpu: 250m, memory: 512Mi}
+        limits: {cpu: "1", memory: 2Gi}
+      script: |
+        #!/bin/sh
+        set -eu
+        semgrep scan $(params.rulesets) \
+          --severity ERROR --error \
+          --exclude node_modules --exclude coverage --exclude test \
+          --metrics off .
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: sca-trivy-fs
+  namespace: catalogue-cicd
+  labels:
+    app.kubernetes.io/part-of: catalogue-cicd
+spec:
+  description: >-
+    Software composition analysis: scans package-lock.json for known CVEs.
+    Fails on CRITICAL vulnerabilities that have a fix available.
+  # Trivy v0.69.4 (and Docker Hub 0.69.5/0.69.6) were malicious releases
+  # (CVE-2026-33634). Use a known-good version and pin it by digest.
+  params:
+    - name: severity
+      type: string
+      default: CRITICAL
+    - name: image
+      type: string
+      default: docker.io/aquasec/trivy:0.69.3
+  workspaces:
+    - name: source
+  steps:
+    - name: trivy-fs
+      image: $(params.image)
+      workingDir: $(workspaces.source.path)
+      env:
+        - name: TRIVY_CACHE_DIR
+          value: /tmp/trivy
+      computeResources:
+        requests: {cpu: 250m, memory: 512Mi}
+        limits: {cpu: "1", memory: 2Gi}
+      script: |
+        #!/bin/sh
+        set -eu
+        trivy fs --scanners vuln \
+          --severity "$(params.severity)" --ignore-unfixed \
+          --skip-dirs node_modules \
+          --exit-code 1 --format table .
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: secret-scan-gitleaks
+  namespace: catalogue-cicd
+  labels:
+    app.kubernetes.io/part-of: catalogue-cicd
+spec:
+  description: Detects hard-coded secrets (passwords, tokens, keys). Any finding fails the task.
+  params:
+    - name: image
+      type: string
+      default: docker.io/zricethezav/gitleaks:v8.21.2
+  workspaces:
+    - name: source
+  steps:
+    - name: gitleaks
+      image: $(params.image)
+      workingDir: $(workspaces.source.path)
+      computeResources:
+        requests: {cpu: 100m, memory: 128Mi}
+        limits: {cpu: 500m, memory: 512Mi}
+      script: |
+        #!/bin/sh
+        set -eu
+        CONFIG=""
+        [ -f .gitleaks.toml ] && CONFIG="--config .gitleaks.toml"
+        gitleaks dir . $CONFIG --redact --no-banner --exit-code 1 --verbose
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: containerfile-scan
+  namespace: catalogue-cicd
+  labels:
+    app.kubernetes.io/part-of: catalogue-cicd
+spec:
+  description: >-
+    Misconfiguration scan of the Containerfile (root user, missing USER,
+    ADD from URLs, latest tags...). Fails on HIGH or CRITICAL findings.
+  params:
+    - name: containerfile
+      type: string
+      default: Containerfile
+    - name: image
+      type: string
+      default: docker.io/aquasec/trivy:0.69.3
+  workspaces:
+    - name: source
+  steps:
+    - name: trivy-config
+      image: $(params.image)
+      workingDir: $(workspaces.source.path)
+      env:
+        - name: TRIVY_CACHE_DIR
+          value: /tmp/trivy
+      script: |
+        #!/bin/sh
+        set -eu
+        trivy config --severity HIGH,CRITICAL --exit-code 1 \
+          --file-patterns "dockerfile:$(params.containerfile)" \
+          --skip-dirs node_modules .
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: manifest-scan-kube-linter
+  namespace: catalogue-cicd
+  labels:
+    app.kubernetes.io/part-of: catalogue-cicd
+spec:
+  description: >-
+    Lints the plain Kubernetes manifests in every environment folder with
+    kube-linter. Catches root containers, missing limits, privileged pods,
+    missing probes, unsafe PDBs and similar.
+  params:
+    - name: paths
+      type: string
+      default: "environments/dev environments/test environments/prod"
+    - name: image
+      type: string
+      default: docker.io/stackrox/kube-linter:v0.7.1-alpine
+  workspaces:
+    - name: source
+  steps:
+    - name: lint
+      image: $(params.image)
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/sh
+        set -eu
+        rc=0
+        for dir in $(params.paths); do
+          echo "== kube-linter: $dir"
+          kube-linter lint "$dir" --config .kube-linter.yaml || rc=1
+        done
+        exit $rc

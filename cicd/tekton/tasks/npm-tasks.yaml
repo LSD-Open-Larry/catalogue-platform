@@ -1,0 +1,103 @@
+# npm-install runs once; lint and test then run in parallel on the same
+# workspace (running `npm ci` twice in one directory at once would race).
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: npm-install
+  namespace: catalogue-cicd
+  labels:
+    app.kubernetes.io/part-of: catalogue-cicd
+spec:
+  description: Installs dependencies with npm ci and emits the app version and short commit SHA.
+  params:
+    - name: commit
+      type: string
+      description: Full commit SHA from git-clone
+    - name: image
+      type: string
+      default: registry.access.redhat.com/ubi9/nodejs-20:latest
+  results:
+    - name: VERSION
+      description: Version from package.json
+    - name: SHORT_SHA
+      description: First 7 characters of the commit SHA
+  workspaces:
+    - name: source
+  steps:
+    - name: install
+      image: $(params.image)
+      workingDir: $(workspaces.source.path)
+      env:
+        - name: npm_config_cache
+          value: $(workspaces.source.path)/.npm
+        - name: COMMIT
+          value: $(params.commit)
+      computeResources:
+        requests: {cpu: 250m, memory: 512Mi}
+        limits: {cpu: "1", memory: 1Gi}
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        npm ci --no-audit --no-fund
+        node -p "require('./package.json').version" | tr -d '\n' > "$(results.VERSION.path)"
+        echo -n "${COMMIT:0:7}" > "$(results.SHORT_SHA.path)"
+        echo "version=$(cat "$(results.VERSION.path)") sha=$(cat "$(results.SHORT_SHA.path)")"
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: npm-lint
+  namespace: catalogue-cicd
+  labels:
+    app.kubernetes.io/part-of: catalogue-cicd
+spec:
+  description: Runs ESLint. Any error-level finding fails the task.
+  params:
+    - name: image
+      type: string
+      default: registry.access.redhat.com/ubi9/nodejs-20:latest
+  workspaces:
+    - name: source
+  steps:
+    - name: lint
+      image: $(params.image)
+      workingDir: $(workspaces.source.path)
+      computeResources:
+        requests: {cpu: 100m, memory: 256Mi}
+        limits: {cpu: 500m, memory: 512Mi}
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        npm run lint
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: npm-test
+  namespace: catalogue-cicd
+  labels:
+    app.kubernetes.io/part-of: catalogue-cicd
+spec:
+  description: >-
+    Runs unit tests with coverage. The coverage threshold (70%) is enforced by
+    the jest config in package.json, so a drop fails the task.
+  params:
+    - name: image
+      type: string
+      default: registry.access.redhat.com/ubi9/nodejs-20:latest
+  workspaces:
+    - name: source
+  steps:
+    - name: test
+      image: $(params.image)
+      workingDir: $(workspaces.source.path)
+      env:
+        - name: CI
+          value: "true"
+      computeResources:
+        requests: {cpu: 250m, memory: 512Mi}
+        limits: {cpu: "1", memory: 1Gi}
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        npm test -- --ci

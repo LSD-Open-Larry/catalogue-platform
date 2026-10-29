@@ -1,0 +1,41 @@
+# Wave 2 - CI/CD, from cicd/ into catalogue-cicd:
+#   tekton/tasks/       npm, security-scan and supply-chain Tasks
+#   tekton/pipelines/   catalogue-api-pr, catalogue-api-release, catalogue-config-pr
+#   pac/                Pipelines-as-Code Repository CRs
+#   secrets/            (add) SealedSecrets for quay-push-secret,
+#                       config-repo-credentials, roxsecrets, cosign-keys
+#
+# After this syncs, a change to any pipeline or scan is a PR to this repo -
+# no more `oc apply` of Tekton objects.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cicd
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+  labels:
+    app.kubernetes.io/part-of: catalogue-platform
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/LSD-Open-Larry/catalogue-platform.git
+    targetRevision: main
+    path: cicd
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: catalogue-cicd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      # SealedSecret CRs may not be known on the very first pass while the
+      # controller (wave 0) is still starting.
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 10
+      backoff: {duration: 15s, factor: 2, maxDuration: 5m}

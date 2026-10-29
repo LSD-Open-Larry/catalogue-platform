@@ -1,0 +1,36 @@
+# Red Hat Advanced Cluster Security operator, installed through OLM.
+# Synced by apps/10-operators.yaml (wave 0).
+#
+# This installs the OPERATOR only. Central and the SecuredCluster are custom
+# resources that need the operator's CRDs and a few one-time secrets
+# (init bundle), so add them later as separate files here, e.g.
+# central.yaml / securedcluster.yaml, once the operator is running.
+# Delete this file if your cluster already has ACS, or you use Kyverno instead.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rhacs-operator
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: rhacs-operator
+  namespace: rhacs-operator
+# No spec.targetNamespaces: the operator watches all namespaces, as Red Hat recommends.
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: rhacs-operator
+  namespace: rhacs-operator
+spec:
+  name: rhacs-operator
+  channel: stable
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  # Automatic so the first install needs no human. With Manual, even the
+  # first InstallPlan waits for approval. Switch to Manual (and pin
+  # startingCSV) once installed, if you want upgrades to be a reviewed change.
+  installPlanApproval: Automatic

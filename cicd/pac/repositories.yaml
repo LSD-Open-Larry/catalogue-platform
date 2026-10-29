@@ -1,0 +1,40 @@
+# Pipelines-as-Code Repository CRs: connect each Git repo to the
+# catalogue-cicd namespace. PipelineRuns from the repo's .tekton/ folder
+# run here.
+#
+# Option A (recommended): the cluster admin has configured the PaC GitHub
+# App (`tkn pac bootstrap`). Then no git_provider block is needed.
+# Option B: webhook + personal access token. Create the secret first:
+#   oc -n catalogue-cicd create secret generic pac-git-provider \
+#     --from-literal=provider.token=<PAT> --from-literal=webhook.secret=<random>
+# and uncomment the git_provider blocks. `tkn pac create repository` can do
+# all of this interactively, including creating the webhook.
+apiVersion: pipelinesascode.tekton.dev/v1alpha1
+kind: Repository
+metadata:
+  name: catalogue-api
+  namespace: catalogue-cicd
+spec:
+  url: https://github.com/LSD-Open-Larry/catalogue-api
+  # git_provider:
+  #   secret:
+  #     name: pac-git-provider
+  #     key: provider.token
+  #   webhook_secret:
+  #     name: pac-git-provider
+  #     key: webhook.secret
+---
+apiVersion: pipelinesascode.tekton.dev/v1alpha1
+kind: Repository
+metadata:
+  name: catalogue-config
+  namespace: catalogue-cicd
+spec:
+  url: https://github.com/LSD-Open-Larry/catalogue-config
+  # git_provider:
+  #   secret:
+  #     name: pac-git-provider
+  #     key: provider.token
+  #   webhook_secret:
+  #     name: pac-git-provider
+  #     key: webhook.secret

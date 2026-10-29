@@ -1,0 +1,47 @@
+# One-time patch to the default Argo CD instance (run before or right after
+# bootstrap.yaml):
+#   oc patch argocd openshift-gitops -n openshift-gitops --type merge \
+#     --patch-file argocd-instance-patch.yaml
+#
+# 1. resourceHealthChecks: makes an Application report the health of what it
+#    deployed. Without it, the root app does not wait for wave N to be Healthy
+#    before starting wave N+1, so the sync waves in apps/ would not hold.
+# 2. rbac: maps OpenShift groups to Argo CD roles. Create the groups first:
+#      oc adm groups new catalogue-platform-admins <user>
+#      oc adm groups new catalogue-developers <user> <user>
+#      oc adm groups new catalogue-release-managers <user>
+spec:
+  resourceHealthChecks:
+    - group: argoproj.io
+      kind: Application
+      check: |
+        hs = {}
+        hs.status = "Progressing"
+        hs.message = ""
+        if obj.status ~= nil then
+          if obj.status.health ~= nil then
+            hs.status = obj.status.health.status
+            if obj.status.health.message ~= nil then
+              hs.message = obj.status.health.message
+            end
+          end
+        end
+        return hs
+  rbac:
+    defaultPolicy: ""
+    scopes: "[groups]"
+    policy: |
+      g, system:cluster-admins, role:admin
+      g, cluster-admins, role:admin
+      g, catalogue-platform-admins, role:admin
+
+      # Developers: see all catalogue apps, sync and refresh dev only.
+      p, role:catalogue-developer, applications, get,  catalogue/*, allow
+      p, role:catalogue-developer, applications, sync, catalogue/catalogue-dev, allow
+      p, role:catalogue-developer, logs, get, catalogue/*, allow
+      g, catalogue-developers, role:catalogue-developer
+
+      # Release managers: everything on catalogue apps, including prod sync.
+      p, role:catalogue-release-manager, applications, *, catalogue/*, allow
+      p, role:catalogue-release-manager, logs, get, catalogue/*, allow
+      g, catalogue-release-managers, role:catalogue-release-manager

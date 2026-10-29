@@ -1,0 +1,64 @@
+# OPTION B admission control (use when ACS is not available).
+# Requires Kyverno installed on the cluster. Rejects any Pod in the catalogue
+# namespaces whose catalogue-api image is not signed with the team's Cosign
+# key, and rewrites tags to digests so what runs is exactly what was signed.
+# Replace the public key with the contents of cosign.pub.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: catalogue-verify-signed-images
+  annotations:
+    policies.kyverno.io/title: Verify catalogue image signatures
+    policies.kyverno.io/category: Supply chain
+spec:
+  validationFailureAction: Enforce
+  webhookTimeoutSeconds: 30
+  background: false
+  rules:
+    - name: require-cosign-signature
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [catalogue-dev, catalogue-test, catalogue-prod]
+      verifyImages:
+        - imageReferences:
+            - "quay.io/LSD-Open-Larry/catalogue-api*"
+          mutateDigest: true
+          verifyDigest: true
+          required: true
+          attestors:
+            - entries:
+                - keys:
+                    publicKeys: |-
+                      -----BEGIN PUBLIC KEY-----
+                      REPLACE_WITH_CONTENTS_OF_cosign.pub
+                      -----END PUBLIC KEY-----
+                    rekor:
+                      ignoreTlog: true
+                    ctlog:
+                      ignoreSCT: true
+---
+# Only images from approved registries may run in the catalogue namespaces.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: catalogue-allowed-registries
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: allowed-registries
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [catalogue-dev, catalogue-test, catalogue-prod]
+      validate:
+        message: "Images must come from quay.io/LSD-Open-Larry or Red Hat registries."
+        pattern:
+          spec:
+            =(initContainers):
+              - image: "quay.io/LSD-Open-Larry/* | registry.redhat.io/* | registry.access.redhat.com/*"
+            containers:
+              - image: "quay.io/LSD-Open-Larry/* | registry.redhat.io/* | registry.access.redhat.com/*"

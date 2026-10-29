@@ -1,0 +1,162 @@
+# Release pipeline: runs on merge to main. Same gates as the PR pipeline,
+# then build once, check, sign, publish, and promote the digest to dev.
+#
+#   clone ─┬─ npm-install ─┬─ lint ────────┐
+#          │               └─ unit-test ───┤
+#          ├─ sca ─────────────────────────┤
+#          ├─ sast ────────────────────────┤
+#          ├─ secret-scan ─────────────────┤
+#          └─ containerfile-scan ──────────┴─ build ─ acs-image-check ─ sbom-sign-attest ─ promote-dev
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: catalogue-api-release
+  namespace: catalogue-cicd
+  labels:
+    app.kubernetes.io/part-of: catalogue-cicd
+spec:
+  params:
+    - name: git-url
+      type: string
+    - name: git-revision
+      type: string
+    - name: image-repo
+      type: string
+      default: quay.io/LSD-Open-Larry/catalogue-api
+    - name: config-repo-url
+      type: string
+      default: https://github.com/LSD-Open-Larry/catalogue-config.git
+    - name: acs-insecure-skip-tls-verify
+      type: string
+      default: "false"
+  workspaces:
+    - name: source
+    - name: git-auth
+      optional: true
+    - name: registry-auth
+    - name: cosign-keys
+    - name: config-repo-auth
+  results:
+    - name: IMAGE_URL
+      value: $(tasks.build.results.IMAGE_URL)
+    - name: IMAGE_DIGEST
+      value: $(tasks.build.results.IMAGE_DIGEST)
+  tasks:
+    # ---------- source and quality gates (identical to the PR pipeline) ----------
+    - name: clone
+      taskRef:
+        resolver: cluster
+        params:
+          - {name: kind, value: task}
+          - {name: name, value: git-clone}
+          - {name: namespace, value: openshift-pipelines}
+      params:
+        - {name: URL, value: $(params.git-url)}
+        - {name: REVISION, value: $(params.git-revision)}
+      workspaces:
+        - {name: output, workspace: source}
+        - {name: basic-auth, workspace: git-auth}
+
+    - name: npm-install
+      runAfter: [clone]
+      taskRef: {name: npm-install}
+      params:
+        - {name: commit, value: $(tasks.clone.results.COMMIT)}
+      workspaces:
+        - {name: source, workspace: source}
+
+    - name: lint
+      runAfter: [npm-install]
+      taskRef: {name: npm-lint}
+      workspaces:
+        - {name: source, workspace: source}
+
+    - name: unit-test
+      runAfter: [npm-install]
+      taskRef: {name: npm-test}
+      workspaces:
+        - {name: source, workspace: source}
+
+    - name: sca
+      runAfter: [clone]
+      taskRef: {name: sca-trivy-fs}
+      workspaces:
+        - {name: source, workspace: source}
+
+    - name: sast
+      runAfter: [clone]
+      taskRef: {name: sast-semgrep}
+      workspaces:
+        - {name: source, workspace: source}
+
+    - name: secret-scan
+      runAfter: [clone]
+      taskRef: {name: secret-scan-gitleaks}
+      workspaces:
+        - {name: source, workspace: source}
+
+    - name: containerfile-scan
+      runAfter: [clone]
+      taskRef: {name: containerfile-scan}
+      workspaces:
+        - {name: source, workspace: source}
+
+    # ---------- build once ----------
+    - name: build
+      runAfter: [lint, unit-test, sca, sast, secret-scan, containerfile-scan]
+      taskRef:
+        resolver: cluster
+        params:
+          - {name: kind, value: task}
+          - {name: name, value: buildah}
+          - {name: namespace, value: openshift-pipelines}
+      params:
+        - name: IMAGE
+          value: $(params.image-repo):$(tasks.npm-install.results.VERSION)-$(tasks.npm-install.results.SHORT_SHA)
+        - name: DOCKERFILE
+          value: ./Containerfile
+        - name: CONTEXT
+          value: .
+        - name: BUILD_EXTRA_ARGS
+          value: >-
+            --build-arg APP_VERSION=$(tasks.npm-install.results.VERSION)
+            --build-arg GIT_COMMIT=$(tasks.clone.results.COMMIT)
+            --label io.openshift.build.commit.id=$(tasks.clone.results.COMMIT)
+            --label io.openshift.build.source-location=$(params.git-url)
+            --label pipeline-run=$(context.pipelineRun.name)
+      workspaces:
+        - {name: source, workspace: source}
+        - {name: dockerconfig, workspace: registry-auth}
+
+    # ---------- check, sign, publish evidence ----------
+    - name: acs-image-check
+      runAfter: [build]
+      taskRef: {name: acs-image-check}
+      params:
+        - {name: image, value: "$(params.image-repo)@$(tasks.build.results.IMAGE_DIGEST)"}
+        - {name: insecure-skip-tls-verify, value: $(params.acs-insecure-skip-tls-verify)}
+
+    - name: sbom-sign-attest
+      runAfter: [acs-image-check]
+      taskRef: {name: sbom-sign-attest}
+      params:
+        - {name: image-repo, value: $(params.image-repo)}
+        - {name: digest, value: $(tasks.build.results.IMAGE_DIGEST)}
+      workspaces:
+        - {name: source, workspace: source}
+        - {name: registry-auth, workspace: registry-auth}
+        - {name: cosign-keys, workspace: cosign-keys}
+
+    # ---------- deliver: write to Git, Argo CD does the rest ----------
+    - name: promote-dev
+      runAfter: [sbom-sign-attest]
+      taskRef: {name: gitops-promote}
+      params:
+        - {name: config-repo-url, value: $(params.config-repo-url)}
+        - {name: environment, value: dev}
+        - {name: digest, value: $(tasks.build.results.IMAGE_DIGEST)}
+        - {name: version, value: "$(tasks.npm-install.results.VERSION)-$(tasks.npm-install.results.SHORT_SHA)"}
+        - {name: source-commit, value: $(tasks.clone.results.COMMIT)}
+        - {name: pipeline-run, value: $(context.pipelineRun.name)}
+      workspaces:
+        - {name: config-repo-auth, workspace: config-repo-auth}
