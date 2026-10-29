@@ -29,6 +29,8 @@ spec:
       recurse: true
   destination:
     server: https://kubernetes.default.svc
+    # Must be a namespace allowed by the "platform" project. objects set their own namespace or are cluster-scoped; this is only the default.
+    namespace: openshift-gitops
   syncPolicy:
     automated:
       prune: false          # never delete a namespace (and its data) because a file moved

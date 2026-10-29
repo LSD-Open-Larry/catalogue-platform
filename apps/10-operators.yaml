@@ -27,6 +27,8 @@ spec:
       recurse: true
   destination:
     server: https://kubernetes.default.svc
+    # Must be a namespace allowed by the "platform" project. operators/ objects set their own namespace; this is only the default.
+    namespace: rhacs-operator
   syncPolicy:
     automated:
       prune: false          # never uninstall an operator because a file moved
